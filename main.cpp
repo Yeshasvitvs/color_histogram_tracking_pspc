@@ -26,26 +26,27 @@ using namespace cv;
 
 //Global Parameters
 int kernel_size = 5;
-bool first;
-bool track;
+bool first; //To capture the background reference image
+bool track; //To do the current frame processing
 int x_step = 16, y_step = 12; //size of the cell in the overlay grid
 
 VideoCapture cap(0); // open the default camera
-Mat src, dst;
 Mat ref_bgr, current_bgr;
-
+Mat ref_gray, current_gray;
+Mat bg_image;
 
 //double hist_threshold_int = 400;
 //double hist_threshold_chi = 50;
+
 vector<Point> p_1,p_2;
 vector<Point>::iterator point1_it,point2_it;
 
 void processCurrent();
 void compareHistograms();
 
-/// Initialize values
-int inter_slider = 401;
-int chi_slider = 70;
+/// Initialize trackbar values
+int inter_slider = 200;
+int chi_slider = 5;
 
 /// Establish the number of bins
 int histSize = 256;
@@ -56,29 +57,43 @@ const float* histRange = { range };
 
 bool uniform = true; bool accumulate = false;
 
-struct cells{
+struct cells_bgr{
 
   cv::Mat cell = cv::Mat(16, 12, CV_8UC3, Scalar(0,0,0)); //Rows and Cols
 
 };
 
-struct hists{
+struct cells_gray{
+
+  cv::Mat cell = cv::Mat(16, 12, CV_8UC1, Scalar(0,0,0)); //Rows and Cols
+
+};
+
+struct hists_bgr{
 
   cv::Mat hist = cv::Mat(16, 12, CV_8UC3, Scalar(0,0,0));
 
 };
 
-cells cell[40][40];
-hists bg_b_hist[40][40], bg_g_hist[40][40], bg_r_hist[40][40];
+struct hists_gray{
 
-cells ct_cell[40][40];
-hists ct_b_hist[40][40], ct_g_hist[40][40], ct_r_hist[40][40];
+  cv::Mat hist = cv::Mat(16, 12, CV_8UC1, Scalar(0,0,0));
+
+};
+
+cells_bgr bg_cell_bgr[40][40];
+cells_gray bg_cell_gray[40][40]; //Grid cells for background
+hists_gray bg_hist[40][40];
+hists_bgr bg_b_hist[40][40], bg_g_hist[40][40], bg_r_hist[40][40];
+
+cells_bgr ct_cell_bgr[40][40];
+cells_gray ct_cell_gray[40][40]; //Grid cells for current image
+hists_gray ct_hist[40][40];
+hists_bgr ct_b_hist[40][40], ct_g_hist[40][40], ct_r_hist[40][40];
 
 
 int main( int argc, char** argv )
 {
-
-
 
   if(!cap.isOpened()){
         cout << "Camera Not Open..." << endl;
@@ -94,9 +109,8 @@ int main( int argc, char** argv )
       while(Keyhit==-1){
 
           cap.read(ref_bgr);
-          putText(ref_bgr, "Press enter to capture background image ", cvPoint(20,60),FONT_HERSHEY_COMPLEX_SMALL, 0.6, cvScalar(255,255,255), 1, CV_AA);
-
           namedWindow( "Camera Feed", CV_WINDOW_AUTOSIZE );
+          putText(ref_bgr, "Press enter to capture background image ", cvPoint(20,60),FONT_HERSHEY_COMPLEX_SMALL, 0.6, cvScalar(255,255,255), 1, CV_AA);
           imshow( "Camera Feed", ref_bgr);
           Keyhit=cv::waitKey(1);
 
@@ -104,9 +118,17 @@ int main( int argc, char** argv )
           track = 0;
       }
 
+      //destroyAllWindows();
+      //ref_bgr.copyTo(bg_image);
+      //putText(bg_image, "This is the background image ", cvPoint(40,60),FONT_HERSHEY_COMPLEX_SMALL, 0.6, cvScalar(255,255,255), 1);
+      //namedWindow( "Background Image", CV_WINDOW_AUTOSIZE );
+      //imshow( "Background Image", bg_image);
+      //waitKey(10);
+
       while(first == 0){ //If this is the first frame, take it as reference frame
-          cout << "Capturing first frame!" << endl;
+          //cout << "Capturing background frame!" << endl;
           cap.read(ref_bgr);
+          cvtColor(ref_bgr,ref_gray,CV_BGR2GRAY);
           first = 1; //Captured first frame
           //namedWindow( "Reference Frame", CV_WINDOW_AUTOSIZE );
           //imshow( "Reference Frame", ref_bgr);
@@ -123,7 +145,9 @@ int main( int argc, char** argv )
 
                           //cout << pixel_x+(x_step*(i)) << " , " << pixel_y+(y_step*(j)) << endl;
 
-                          cell[i][j].cell.at<uchar>(pixel_x,pixel_y) = ref_bgr.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step * (j)));
+                          bg_cell_bgr[i][j].cell.at<uchar>(pixel_x,pixel_y) = ref_bgr.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step*(j)));
+                          bg_cell_gray[i][j].cell.at<uchar>(pixel_x,pixel_y) = ref_gray.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step*(j)));
+
 
                         }
 
@@ -131,29 +155,31 @@ int main( int argc, char** argv )
 
                   //cout << cell[i][j].cell << endl;
 
+
                   //Now each cell is loaded with proper values from the image, we need to compute the cell histogram now
                   /// Separate the image in 3 places ( B, G and R )
                   vector<Mat> cell_bgr_planes;
-                  split( cell[i][j].cell, cell_bgr_planes );
+                  split( bg_cell_bgr[i][j].cell, cell_bgr_planes );
 
                   bool uniform = true; bool accumulate = false;
 
-                  /// Compute the histograms:
+                  /// Compute the histograms
+                  calcHist( &bg_cell_gray[i][j].cell, 1, 0, Mat(), bg_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
                   calcHist( &cell_bgr_planes[0], 1, 0, Mat(), bg_b_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
                   calcHist( &cell_bgr_planes[1], 1, 0, Mat(), bg_g_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
                   calcHist( &cell_bgr_planes[2], 1, 0, Mat(), bg_r_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
 
 
                   // Draw the histograms for B, G and R
-                  int hist_w = 512; int hist_h = 400;
-                  int bin_w = cvRound( (double) hist_w/histSize );
+                  //int hist_w = 512; int hist_h = 400;
+                  //int bin_w = cvRound( (double) hist_w/histSize );
 
-                  Mat cell_histImage( hist_h, hist_w, CV_8UC3, Scalar( 0,0,0) );
+                  //Mat cell_histImage( hist_h, hist_w, CV_8UC3, Scalar( 0,0,0) );
 
                   /// Normalize the result to [ 0, histImage.rows ]
-                  normalize(bg_b_hist[i][j].hist, bg_b_hist[i][j].hist, 0, cell_histImage.rows, NORM_MINMAX, -1, Mat() );
-                  normalize(bg_g_hist[i][j].hist, bg_g_hist[i][j].hist, 0, cell_histImage.rows, NORM_MINMAX, -1, Mat() );
-                  normalize(bg_r_hist[i][j].hist, bg_r_hist[i][j].hist, 0, cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+                  //normalize(bg_b_hist[i][j].hist, bg_b_hist[i][j].hist, 0, cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+                  //normalize(bg_g_hist[i][j].hist, bg_g_hist[i][j].hist, 0, cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+                  //normalize(bg_r_hist[i][j].hist, bg_r_hist[i][j].hist, 0, cell_histImage.rows, NORM_MINMAX, -1, Mat() );
 
                   /// Draw for each channel
                   /*for( int l = 1; l < histSize; l++ )
@@ -184,7 +210,6 @@ int main( int argc, char** argv )
       }
 
       while(track == 1 ){
-
           processCurrent();//Current frame processing
         }
 
@@ -199,13 +224,13 @@ void processCurrent(){//Current frame processing
   //Process the current frame
   //cout << "Capturing next frame!" << endl;
   cap.read(current_bgr);
+  cvtColor(current_bgr,current_gray,CV_BGR2GRAY);
   //namedWindow( "cam feed", CV_WINDOW_AUTOSIZE );
   //imshow( "cam feed", current_bgr);
   //waitKey(10);
 
   for(int i = 0; i < 40 ; i++ ){ // Grid Rows
       for(int j = 0; j < 40 ; j++ ){ //Grid Cols
-
 
           //Nowe store the pixels values in each cell from image
           for(int pixel_x = 0; pixel_x < 16 ; pixel_x++ ){ //Image Rows
@@ -214,7 +239,8 @@ void processCurrent(){//Current frame processing
 
                   //cout << pixel_x+(x_step*(i)) << " , " << pixel_y+(y_step*(j)) << endl;
 
-                  ct_cell[i][j].cell.at<uchar>(pixel_x,pixel_y) = current_bgr.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step * (j)));
+                  ct_cell_bgr[i][j].cell.at<uchar>(pixel_x,pixel_y) = current_bgr.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step*(j)));
+                  ct_cell_gray[i][j].cell.at<uchar>(pixel_x,pixel_y) = current_gray.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step*(j)));
                   //cout << "Works and but here..." << endl;
                   //cout << cell[i][j].cell << endl;
 
@@ -223,30 +249,31 @@ void processCurrent(){//Current frame processing
 
             }
 
+
           //Calculating cell histograms for current image
           /// Separate the image in 3 places ( B, G and R )
           vector<Mat> cell_bgr_planes;
-          split( ct_cell[i][j].cell, cell_bgr_planes );
+          split( ct_cell_bgr[i][j].cell, cell_bgr_planes );
 
           bool uniform = true; bool accumulate = false;
 
-          /// Compute the histograms:
+          /// Compute the histograms
+          calcHist( &ct_cell_gray[i][j].cell, 1, 0, Mat(), ct_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
           calcHist( &cell_bgr_planes[0], 1, 0, Mat(), ct_b_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
           calcHist( &cell_bgr_planes[1], 1, 0, Mat(), ct_g_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
           calcHist( &cell_bgr_planes[2], 1, 0, Mat(), ct_r_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
 
 
-
           // Draw the histograms for B, G and R
-          int hist_w = 512; int hist_h = 400;
-          int bin_w = cvRound( (double) hist_w/histSize );
+          //int hist_w = 512; int hist_h = 400;
+          //int bin_w = cvRound( (double) hist_w/histSize );
 
-          Mat ct_cell_histImage( hist_h, hist_w, CV_8UC3, Scalar( 0,0,0) );
+          //Mat ct_cell_histImage( hist_h, hist_w, CV_8UC3, Scalar( 0,0,0) );
 
           /// Normalize the result to [ 0, histImage.rows ]
-          normalize(ct_b_hist[i][j].hist, ct_b_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
-          normalize(ct_g_hist[i][j].hist, ct_g_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
-          normalize(ct_r_hist[i][j].hist, ct_r_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+          //normalize(ct_b_hist[i][j].hist, ct_b_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+          //normalize(ct_g_hist[i][j].hist, ct_g_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+          //normalize(ct_r_hist[i][j].hist, ct_r_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
 
           /// Draw for each channel
           /*for( int l = 1; l < histSize; l++ )
@@ -281,8 +308,6 @@ void processCurrent(){//Current frame processing
 
 void compareHistograms(){
 
-
-
   namedWindow("Tracking", CV_WINDOW_AUTOSIZE);
   createTrackbar("Intersection", "Tracking", &inter_slider, 1000);
   createTrackbar("Chi_Square", "Tracking", &chi_slider, 1000);
@@ -290,31 +315,45 @@ void compareHistograms(){
   double hist_threshold_int = getTrackbarPos("Intersection", "Tracking");
   double hist_threshold_chi = getTrackbarPos("Chi_Square", "Tracking");
 
+  double inter_b = 0;
+  double inter_g = 0;
+  double inter_r = 0;
+  double inter = 0;
+
+  double chisq_b = 0;
+  double chisq_g = 0;
+  double chisq_r = 0;
+  double chisq = 0;
+
   //cout <<  hist_threshold_int << "," << hist_threshold_chi << endl;
   //Comparing Histograms
   for(int i = 0; i < 40 ; i++ ){
       for(int j = 0; j < 40 ; j++ ){
 
-          double inter_b = compareHist(bg_b_hist[i][j].hist,ct_b_hist[i][j].hist,CV_COMP_INTERSECT);
-          double chisq_b = compareHist(bg_b_hist[i][j].hist,ct_b_hist[i][j].hist,CV_COMP_CHISQR);
+           inter_b = compareHist(bg_b_hist[i][j].hist,ct_b_hist[i][j].hist,CV_COMP_INTERSECT);
+           chisq_b = compareHist(bg_b_hist[i][j].hist,ct_b_hist[i][j].hist,CV_COMP_CHISQR);
 
-          double inter_g = compareHist(bg_g_hist[i][j].hist,ct_g_hist[i][j].hist,CV_COMP_INTERSECT);
-          double chisq_g = compareHist(bg_g_hist[i][j].hist,ct_g_hist[i][j].hist,CV_COMP_CHISQR);
+           inter_g = compareHist(bg_g_hist[i][j].hist,ct_g_hist[i][j].hist,CV_COMP_INTERSECT);
+           chisq_g = compareHist(bg_g_hist[i][j].hist,ct_g_hist[i][j].hist,CV_COMP_CHISQR);
 
-          double inter_r = compareHist(bg_r_hist[i][j].hist,ct_r_hist[i][j].hist,CV_COMP_INTERSECT);
-          double chisq_r = compareHist(bg_r_hist[i][j].hist,ct_r_hist[i][j].hist,CV_COMP_CHISQR);
+           inter_r = compareHist(bg_r_hist[i][j].hist,ct_r_hist[i][j].hist,CV_COMP_INTERSECT);
+           chisq_r = compareHist(bg_r_hist[i][j].hist,ct_r_hist[i][j].hist,CV_COMP_CHISQR);
 
-          //cout << inter_b << "," << chisq_b << "," << inter_g << "," << chisq_g << "," << inter_r << "," << chisq_r << endl;
+           inter = compareHist(bg_hist[i][j].hist,ct_hist[i][j].hist,CV_COMP_INTERSECT);
+           chisq = compareHist(bg_hist[i][j].hist,ct_hist[i][j].hist,CV_COMP_CHISQR);
 
-          if( inter_b > hist_threshold_int && chisq_b > hist_threshold_chi
-              && inter_g > hist_threshold_int && chisq_g > hist_threshold_chi
-              && inter_r > hist_threshold_int && chisq_r > hist_threshold_chi){
+           //cout << "Cell" << "(" << i << "," << j << ")" << ": " << inter << endl;
+          //cout << "Cell" << "(" << i << "," << j << ")" << ": " << inter << "," << chisq << endl;
+          //cout << "Cell" << "(" << i << "," << j << ")" << ": " << inter_b << "," << chisq_b << "," << inter_g << "," << chisq_g << "," << inter_r << "," << chisq_r << endl;
+
+          if( inter > hist_threshold_int && chisq > hist_threshold_chi){
 
               Point p1,p2;
               p1.x = i*16; p1.y = j*12;
               p2.x = i*16+16; p2.y = j*12+12;
               //cout << p1.x << "," << p1.y << "," << p2.x << "," << p2.y << endl;
               p_1.push_back(p1); p_2.push_back(p2);
+
 
             }
           //cout << compareHist(bg_b_hist[i][j].hist,ct_b_hist[i][j].hist,CV_COMP_CHISQR) << endl;
