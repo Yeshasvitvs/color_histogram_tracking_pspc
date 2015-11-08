@@ -26,8 +26,9 @@ using namespace cv;
 
 //Global Parameters
 int kernel_size = 5;
-bool first = 0;
-int x_step = 16, y_step = 12;
+bool first;
+bool track;
+int x_step = 16, y_step = 12; //size of the cell in the overlay grid
 
 VideoCapture cap(0); // open the default camera
 Mat src, dst;
@@ -39,8 +40,12 @@ Mat ref_bgr, current_bgr;
 vector<Point> p_1,p_2;
 vector<Point>::iterator point1_it,point2_it;
 
-
+void processCurrent();
 void compareHistograms();
+
+/// Initialize values
+int inter_slider = 401;
+int chi_slider = 70;
 
 /// Establish the number of bins
 int histSize = 256;
@@ -73,20 +78,31 @@ hists ct_b_hist[40][40], ct_g_hist[40][40], ct_r_hist[40][40];
 int main( int argc, char** argv )
 {
 
-  /// Initialize values
-  int inter_slider = 401;
-  int chi_slider = 70;
 
-  namedWindow("Tracking", CV_WINDOW_AUTOSIZE);
-  createTrackbar("Intersection", "Tracking", &inter_slider, 1000);
-  createTrackbar("Chi_Square", "Tracking", &chi_slider, 1000);
 
   if(!cap.isOpened()){
         cout << "Camera Not Open..." << endl;
         return -1;
     }// check if we succeeded
+
+
+  int Keyhit=-1;//Used to get Enter input from the keyboard for ROI selection
+
   while(cap.isOpened()){
+
       //cout << "Camera is Open!" << endl;
+      while(Keyhit==-1){
+
+          cap.read(ref_bgr);
+          putText(ref_bgr, "Press enter to capture background image ", cvPoint(20,60),FONT_HERSHEY_COMPLEX_SMALL, 0.6, cvScalar(255,255,255), 1, CV_AA);
+
+          namedWindow( "Camera Feed", CV_WINDOW_AUTOSIZE );
+          imshow( "Camera Feed", ref_bgr);
+          Keyhit=cv::waitKey(1);
+
+          first = 0;
+          track = 0;
+      }
 
       while(first == 0){ //If this is the first frame, take it as reference frame
           cout << "Capturing first frame!" << endl;
@@ -98,7 +114,6 @@ int main( int argc, char** argv )
 
           //Building Background Model
           //For a 40 X 40 Grid to overlay the whole image each cell is like 16X12 pixels size, Good thing is we know cell size 16X12 pixels
-
           for(int i = 0; i < 40 ; i++ ){ // Grid Rows
               for(int j = 0; j < 40 ; j++ ){ //Grid Cols
 
@@ -165,97 +180,112 @@ int main( int argc, char** argv )
 
                 }
             }
+          track = 1;
       }
 
-      //Process the current frame
-      //cout << "Capturing next frame!" << endl;
-      cap.read(current_bgr);
-      //namedWindow( "cam feed", CV_WINDOW_AUTOSIZE );
-      //imshow( "cam feed", current_bgr);
-      //waitKey(10);
+      while(track == 1 ){
 
-      for(int i = 0; i < 40 ; i++ ){ // Grid Rows
-          for(int j = 0; j < 40 ; j++ ){ //Grid Cols
-
-
-              //Nowe store the pixels values in each cell from image
-              for(int pixel_x = 0; pixel_x < 16 ; pixel_x++ ){ //Image Rows
-                  for(int  pixel_y = 0; pixel_y < 12 ; pixel_y++ ){ //Image Cols
-                      //cout << "Works and also here..." << endl;
-
-                      //cout << pixel_x+(x_step*(i)) << " , " << pixel_y+(y_step*(j)) << endl;
-
-                      ct_cell[i][j].cell.at<uchar>(pixel_x,pixel_y) = current_bgr.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step * (j)));
-                      //cout << "Works and but here..." << endl;
-                      //cout << cell[i][j].cell << endl;
-
-
-                    }
-
-                }
-
-              //Calculating cell histograms for current image
-              /// Separate the image in 3 places ( B, G and R )
-              vector<Mat> cell_bgr_planes;
-              split( ct_cell[i][j].cell, cell_bgr_planes );
-
-              bool uniform = true; bool accumulate = false;
-
-              /// Compute the histograms:
-              calcHist( &cell_bgr_planes[0], 1, 0, Mat(), ct_b_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
-              calcHist( &cell_bgr_planes[1], 1, 0, Mat(), ct_g_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
-              calcHist( &cell_bgr_planes[2], 1, 0, Mat(), ct_r_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
-
-
-
-              // Draw the histograms for B, G and R
-              int hist_w = 512; int hist_h = 400;
-              int bin_w = cvRound( (double) hist_w/histSize );
-
-              Mat ct_cell_histImage( hist_h, hist_w, CV_8UC3, Scalar( 0,0,0) );
-
-              /// Normalize the result to [ 0, histImage.rows ]
-              normalize(ct_b_hist[i][j].hist, ct_b_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
-              normalize(ct_g_hist[i][j].hist, ct_g_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
-              normalize(ct_r_hist[i][j].hist, ct_r_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
-
-              /// Draw for each channel
-              /*for( int l = 1; l < histSize; l++ )
-              {
-                  line( ct_cell_histImage, Point( bin_w*(l-1), hist_h - cvRound(ct_b_hist[i][j].hist.at<float>(l-1)) ) ,
-                                     Point( bin_w*(l), hist_h - cvRound(ct_b_hist[i][j].hist.at<float>(l)) ),
-                                     Scalar( 255, 0, 0), 2, 8, 0  );
-                  line( ct_cell_histImage, Point( bin_w*(l-1), hist_h - cvRound(ct_g_hist[i][j].hist.at<float>(l-1)) ) ,
-                                     Point( bin_w*(l), hist_h - cvRound(ct_g_hist[i][j].hist.at<float>(l)) ),
-                                     Scalar( 0, 255, 0), 2, 8, 0  );
-                  line( ct_cell_histImage, Point( bin_w*(l-1), hist_h - cvRound(ct_r_hist[i][j].hist.at<float>(l-1)) ) ,
-                                     Point( bin_w*(l), hist_h - cvRound(ct_r_hist[i][j].hist.at<float>(l)) ),
-                                     Scalar( 0, 0, 255), 2, 8, 0  );
-              }*/
-
-
-
-              /// Display
-              //namedWindow("Current Image Cell Histograom", CV_WINDOW_AUTOSIZE );
-              //imshow("Current Image Cell Histograom", ct_cell_histImage );
-
-              //waitKey(10);
-
-            }
+          processCurrent();//Current frame processing
         }
 
 
-
-      compareHistograms(); //Calling Histogram Compare function
-
-    }
-
+ }
 
   return 0;
 }
 
+void processCurrent(){//Current frame processing
+
+  //Process the current frame
+  //cout << "Capturing next frame!" << endl;
+  cap.read(current_bgr);
+  //namedWindow( "cam feed", CV_WINDOW_AUTOSIZE );
+  //imshow( "cam feed", current_bgr);
+  //waitKey(10);
+
+  for(int i = 0; i < 40 ; i++ ){ // Grid Rows
+      for(int j = 0; j < 40 ; j++ ){ //Grid Cols
+
+
+          //Nowe store the pixels values in each cell from image
+          for(int pixel_x = 0; pixel_x < 16 ; pixel_x++ ){ //Image Rows
+              for(int  pixel_y = 0; pixel_y < 12 ; pixel_y++ ){ //Image Cols
+                  //cout << "Works and also here..." << endl;
+
+                  //cout << pixel_x+(x_step*(i)) << " , " << pixel_y+(y_step*(j)) << endl;
+
+                  ct_cell[i][j].cell.at<uchar>(pixel_x,pixel_y) = current_bgr.at<uchar>(pixel_x+(x_step*(i)),pixel_y+(y_step * (j)));
+                  //cout << "Works and but here..." << endl;
+                  //cout << cell[i][j].cell << endl;
+
+
+                }
+
+            }
+
+          //Calculating cell histograms for current image
+          /// Separate the image in 3 places ( B, G and R )
+          vector<Mat> cell_bgr_planes;
+          split( ct_cell[i][j].cell, cell_bgr_planes );
+
+          bool uniform = true; bool accumulate = false;
+
+          /// Compute the histograms:
+          calcHist( &cell_bgr_planes[0], 1, 0, Mat(), ct_b_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
+          calcHist( &cell_bgr_planes[1], 1, 0, Mat(), ct_g_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
+          calcHist( &cell_bgr_planes[2], 1, 0, Mat(), ct_r_hist[i][j].hist, 1, &histSize, &histRange, uniform, accumulate );
+
+
+
+          // Draw the histograms for B, G and R
+          int hist_w = 512; int hist_h = 400;
+          int bin_w = cvRound( (double) hist_w/histSize );
+
+          Mat ct_cell_histImage( hist_h, hist_w, CV_8UC3, Scalar( 0,0,0) );
+
+          /// Normalize the result to [ 0, histImage.rows ]
+          normalize(ct_b_hist[i][j].hist, ct_b_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+          normalize(ct_g_hist[i][j].hist, ct_g_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+          normalize(ct_r_hist[i][j].hist, ct_r_hist[i][j].hist, 0, ct_cell_histImage.rows, NORM_MINMAX, -1, Mat() );
+
+          /// Draw for each channel
+          /*for( int l = 1; l < histSize; l++ )
+          {
+              line( ct_cell_histImage, Point( bin_w*(l-1), hist_h - cvRound(ct_b_hist[i][j].hist.at<float>(l-1)) ) ,
+                                 Point( bin_w*(l), hist_h - cvRound(ct_b_hist[i][j].hist.at<float>(l)) ),
+                                 Scalar( 255, 0, 0), 2, 8, 0  );
+              line( ct_cell_histImage, Point( bin_w*(l-1), hist_h - cvRound(ct_g_hist[i][j].hist.at<float>(l-1)) ) ,
+                                 Point( bin_w*(l), hist_h - cvRound(ct_g_hist[i][j].hist.at<float>(l)) ),
+                                 Scalar( 0, 255, 0), 2, 8, 0  );
+              line( ct_cell_histImage, Point( bin_w*(l-1), hist_h - cvRound(ct_r_hist[i][j].hist.at<float>(l-1)) ) ,
+                                 Point( bin_w*(l), hist_h - cvRound(ct_r_hist[i][j].hist.at<float>(l)) ),
+                                 Scalar( 0, 0, 255), 2, 8, 0  );
+          }*/
+
+
+
+          /// Display
+          //namedWindow("Current Image Cell Histograom", CV_WINDOW_AUTOSIZE );
+          //imshow("Current Image Cell Histograom", ct_cell_histImage );
+
+          //waitKey(10);
+
+        }
+    }
+
+
+
+  compareHistograms(); //Calling Histogram Compare function
+
+}
 
 void compareHistograms(){
+
+
+
+  namedWindow("Tracking", CV_WINDOW_AUTOSIZE);
+  createTrackbar("Intersection", "Tracking", &inter_slider, 1000);
+  createTrackbar("Chi_Square", "Tracking", &chi_slider, 1000);
 
   double hist_threshold_int = getTrackbarPos("Intersection", "Tracking");
   double hist_threshold_chi = getTrackbarPos("Chi_Square", "Tracking");
